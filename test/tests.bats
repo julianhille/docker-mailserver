@@ -166,8 +166,7 @@ load 'test_helper/bats-assert/load'
 }
 
 @test "checking postgrey: there should be a log entry about the whitelisted and passed e-mail user@whitelist.tld in /var/log/mail/mail.log" {
-  run docker exec mail_with_postgrey /bin/sh -c "nc 0.0.0.0 10023 < /tmp/docker-mailserver-test/nc_templates/postgrey_whitelist.txt"
-  sleep 8
+  run docker exec mail_with_postgrey /bin/sh -c "nc -w 8 0.0.0.0 10023 < /tmp/docker-mailserver-test/nc_templates/postgrey_whitelist.txt"
   run docker exec mail_with_postgrey /bin/sh -c "grep -i 'action=pass, reason=client whitelist' /var/log/mail/mail.log | wc -l"
   assert_success
   assert_output 1
@@ -197,6 +196,11 @@ load 'test_helper/bats-assert/load'
   assert_success
 }
 
+@test "checking imap: added user authentication works" {
+  run docker exec mail /bin/sh -c "nc -w 1 0.0.0.0 143 < /tmp/docker-mailserver-test/auth/added-imap-auth.txt"
+  assert_success
+}
+
 #
 # pop
 #
@@ -208,6 +212,11 @@ load 'test_helper/bats-assert/load'
 
 @test "checking pop: authentication works" {
   run docker exec mail_pop3 /bin/sh -c "nc -w 1 0.0.0.0 110 < /tmp/docker-mailserver-test/auth/pop3-auth.txt"
+  assert_success
+}
+
+@test "checking pop: added user authentication works" {
+  run docker exec mail_pop3 /bin/sh -c "nc -w 1 0.0.0.0 110 < /tmp/docker-mailserver-test/auth/added-pop3-auth.txt"
   assert_success
 }
 
@@ -235,7 +244,7 @@ load 'test_helper/bats-assert/load'
 #
 
 @test "checking logs: mail related logs should be located in a subdirectory" {
-  run docker exec mail /bin/sh -c "ls -1 /var/log/mail/ | grep -E 'clamav|freshclam|mail'|wc -l"
+  run docker exec mail /bin/sh -c "ls -1 /var/log/mail/ | grep -E 'clamav|freshclam|mail.log'|wc -l"
   assert_success
   assert_output 3
 }
@@ -264,10 +273,30 @@ load 'test_helper/bats-assert/load'
   assert_success
 }
 
+@test "checking smtp: added user authentication works with good password (plain)" {
+  run docker exec mail /bin/sh -c "nc -w 5 0.0.0.0 25 < /tmp/docker-mailserver-test/auth/added-smtp-auth-plain.txt | grep 'Authentication successful'"
+  assert_success
+}
+
+@test "checking smtp: added user authentication fails with wrong password (plain)" {
+  run docker exec mail /bin/sh -c "nc -w 20 0.0.0.0 25 < /tmp/docker-mailserver-test/auth/added-smtp-auth-plain-wrong.txt | grep 'authentication failed'"
+  assert_success
+}
+
+@test "checking smtp: added user authentication works with good password (login)" {
+  run docker exec mail /bin/sh -c "nc -w 5 0.0.0.0 25 < /tmp/docker-mailserver-test/auth/added-smtp-auth-login.txt | grep 'Authentication successful'"
+  assert_success
+}
+
+@test "checking smtp: added user authentication fails with wrong password (login)" {
+  run docker exec mail /bin/sh -c "nc -w 20 0.0.0.0 25 < /tmp/docker-mailserver-test/auth/added-smtp-auth-login-wrong.txt | grep 'authentication failed'"
+  assert_success
+}
+
 @test "checking smtp: delivers mail to existing account" {
   run docker exec mail /bin/sh -c "grep 'postfix/lmtp' /var/log/mail/mail.log | grep 'status=sent' | grep ' Saved)' | wc -l"
   assert_success
-  assert_output 9
+  assert_output 10
 }
 
 @test "checking smtp: delivers mail to existing alias" {
@@ -349,6 +378,7 @@ load 'test_helper/bats-assert/load'
   assert_success
   [ "${lines[0]}" = "user1@localhost.localdomain" ]
   [ "${lines[1]}" = "user2@otherdomain.tld" ]
+  [ "${lines[2]}" = "added@localhost.localdomain" ]
 }
 
 @test "checking accounts: user mail folders for user1" {
@@ -359,6 +389,12 @@ load 'test_helper/bats-assert/load'
 
 @test "checking accounts: user mail folders for user2" {
   run docker exec mail /bin/bash -c "ls -A /var/mail/otherdomain.tld/user2 | grep -E '.Drafts|.Sent|.Trash|cur|new|subscriptions|tmp' | wc -l"
+  assert_success
+  assert_output 7
+}
+
+@test "checking accounts: user mail folders for added user" {
+  run docker exec mail /bin/bash -c "ls -A /var/mail/localhost.localdomain/added | grep -E '.Drafts|.Sent|.Trash|cur|new|subscriptions|tmp' | wc -l"
   assert_success
   assert_output 7
 }
@@ -574,6 +610,61 @@ load 'test_helper/bats-assert/load'
   assert_output 4
 }
 
+@test "checking opendkim: generator creates keys, tables and TrustedHosts using domain name" {
+  rm -rf "$(pwd)/test/config/with-domain" && mkdir -p "$(pwd)/test/config/with-domain"
+  run docker run --rm \
+    -v "$(pwd)/test/config/with-domain/":/tmp/docker-mailserver/ \
+    -v "$(pwd)/test/config/postfix-accounts.cf":/tmp/docker-mailserver/postfix-accounts.cf \
+    -v "$(pwd)/test/config/postfix-virtual.cf":/tmp/docker-mailserver/postfix-virtual.cf \
+    `docker inspect --format '{{ .Config.Image }}' mail` /bin/sh -c 'generate-dkim-config | wc -l'
+  assert_success
+  assert_output 6
+  # Generate key using domain name
+  run docker run --rm \
+    -v "$(pwd)/test/config/with-domain/":/tmp/docker-mailserver/ \
+    `docker inspect --format '{{ .Config.Image }}' mail` /bin/sh -c 'generate-dkim-domain testdomain.tld | wc -l'
+  assert_success
+  assert_output 1
+  # Check keys for localhost.localdomain
+  run docker run --rm \
+    -v "$(pwd)/test/config/with-domain/opendkim":/etc/opendkim \
+    `docker inspect --format '{{ .Config.Image }}' mail` /bin/sh -c 'ls -1 /etc/opendkim/keys/localhost.localdomain/ | wc -l'
+  assert_success
+  assert_output 2
+  # Check keys for otherdomain.tld
+  run docker run --rm \
+    -v "$(pwd)/test/config/with-domain/opendkim":/etc/opendkim \
+    `docker inspect --format '{{ .Config.Image }}' mail` /bin/sh -c 'ls -1 /etc/opendkim/keys/otherdomain.tld | wc -l'
+  assert_success
+  assert_output 2
+  # Check keys for testdomain.tld
+  run docker run --rm \
+    -v "$(pwd)/test/config/with-domain/opendkim":/etc/opendkim \
+    `docker inspect --format '{{ .Config.Image }}' mail` /bin/sh -c 'ls -1 /etc/opendkim/keys/testdomain.tld | wc -l'
+  assert_success
+  assert_output 2
+  # Check presence of tables and TrustedHosts
+  run docker run --rm \
+    -v "$(pwd)/test/config/with-domain/opendkim":/etc/opendkim \
+    `docker inspect --format '{{ .Config.Image }}' mail` /bin/sh -c "ls -1 /etc/opendkim | grep -E 'KeyTable|SigningTable|TrustedHosts|keys' | wc -l"
+  assert_success
+  assert_output 4
+  # Check valid entries actually present in KeyTable
+  run docker run --rm \
+    -v "$(pwd)/test/config/with-domain/opendkim":/etc/opendkim \
+    `docker inspect --format '{{ .Config.Image }}' mail` /bin/sh -c \
+    "egrep 'localhost.localdomain|otherdomain.tld|localdomain2.com|testdomain.tld' /etc/opendkim/KeyTable | wc -l"
+  assert_success
+  assert_output 4
+  # Check valid entries actually present in SigningTable
+  run docker run --rm \
+    -v "$(pwd)/test/config/with-domain/opendkim":/etc/opendkim \
+    `docker inspect --format '{{ .Config.Image }}' mail` /bin/sh -c \
+    "egrep 'localhost.localdomain|otherdomain.tld|localdomain2.com|testdomain.tld' /etc/opendkim/SigningTable | wc -l"
+  assert_success
+  assert_output 4
+}
+
 #
 # ssl
 #
@@ -640,6 +731,11 @@ load 'test_helper/bats-assert/load'
   assert_success
 }
 
+@test "checking fail2ban: fail2ban-fail2ban.cf overrides" {
+  run docker exec mail_fail2ban /bin/sh -c "fail2ban-client get loglevel | grep DEBUG"
+  assert_success
+}
+
 @test "checking fail2ban: fail2ban-jail.cf overrides" {
   FILTERS=(sshd postfix dovecot postfix-sasl)
 
@@ -662,8 +758,8 @@ load 'test_helper/bats-assert/load'
   # Create a container which will send wrong authentications and should banned
   docker run --name fail-auth-mailer -e MAIL_FAIL2BAN_IP=$MAIL_FAIL2BAN_IP -v "$(pwd)/test":/tmp/docker-mailserver-test -d $(docker inspect --format '{{ .Config.Image }}' mail) tail -f /var/log/faillog
 
-  docker exec fail-auth-mailer /bin/sh -c 'nc $MAIL_FAIL2BAN_IP 25 < /tmp/docker-mailserver-test/auth/smtp-auth-login-wrong.txt'
-  docker exec fail-auth-mailer /bin/sh -c 'nc $MAIL_FAIL2BAN_IP 25 < /tmp/docker-mailserver-test/auth/smtp-auth-login-wrong.txt'
+  docker exec fail-auth-mailer /bin/sh -c "nc $MAIL_FAIL2BAN_IP 25 < /tmp/docker-mailserver-test/auth/smtp-auth-login-wrong.txt"
+  docker exec fail-auth-mailer /bin/sh -c "nc $MAIL_FAIL2BAN_IP 25 < /tmp/docker-mailserver-test/auth/smtp-auth-login-wrong.txt"
 
   sleep 5
 
@@ -1051,6 +1147,22 @@ load 'test_helper/bats-assert/load'
   run docker exec mail_with_ldap /bin/sh -c "postmap -q employees@localhost.localdomain ldap:/etc/postfix/ldap-groups.cf"
   assert_success
   assert_output "some.user@localhost.localdomain"
+
+  # Test of the user part of the domain is not the same as the uniqueIdentifier part in the ldap
+  run docker exec mail_with_ldap /bin/sh -c "postmap -q some.user.email@localhost.localdomain ldap:/etc/postfix/ldap-users.cf"
+  assert_success
+  assert_output "some.user.email@localhost.localdomain"
+
+  # Test email receiving from a other domain then the primary domain of the mailserver
+  run docker exec mail_with_ldap /bin/sh -c "postmap -q some.other.user@localhost.otherdomain ldap:/etc/postfix/ldap-users.cf"
+  assert_success
+  assert_output "some.other.user@localhost.otherdomain"
+  run docker exec mail_with_ldap /bin/sh -c "postmap -q postmaster@localhost.otherdomain ldap:/etc/postfix/ldap-aliases.cf"
+  assert_success
+  assert_output "some.other.user@localhost.otherdomain"
+  run docker exec mail_with_ldap /bin/sh -c "postmap -q employees@localhost.otherdomain ldap:/etc/postfix/ldap-groups.cf"
+  assert_success
+  assert_output "some.other.user@localhost.otherdomain"
 }
 
 @test "checking postfix: ldap custom config files copied" {
@@ -1065,12 +1177,16 @@ load 'test_helper/bats-assert/load'
 @test "checking postfix: ldap config overwrites success" {
  run docker exec mail_with_ldap /bin/sh -c "grep 'server_host = ldap' /etc/postfix/ldap-users.cf"
  assert_success
+ run docker exec mail_with_ldap /bin/sh -c "grep 'start_tls = no' /etc/postfix/ldap-users.cf"
+ assert_success
  run docker exec mail_with_ldap /bin/sh -c "grep 'search_base = ou=people,dc=localhost,dc=localdomain' /etc/postfix/ldap-users.cf"
  assert_success
  run docker exec mail_with_ldap /bin/sh -c "grep 'bind_dn = cn=admin,dc=localhost,dc=localdomain' /etc/postfix/ldap-users.cf"
  assert_success
 
  run docker exec mail_with_ldap /bin/sh -c "grep 'server_host = ldap' /etc/postfix/ldap-groups.cf"
+ assert_success
+ run docker exec mail_with_ldap /bin/sh -c "grep 'start_tls = no' /etc/postfix/ldap-groups.cf"
  assert_success
  run docker exec mail_with_ldap /bin/sh -c "grep 'search_base = ou=people,dc=localhost,dc=localdomain' /etc/postfix/ldap-groups.cf"
  assert_success
@@ -1079,10 +1195,21 @@ load 'test_helper/bats-assert/load'
 
  run docker exec mail_with_ldap /bin/sh -c "grep 'server_host = ldap' /etc/postfix/ldap-aliases.cf"
  assert_success
+ run docker exec mail_with_ldap /bin/sh -c "grep 'start_tls = no' /etc/postfix/ldap-aliases.cf"
+ assert_success
  run docker exec mail_with_ldap /bin/sh -c "grep 'search_base = ou=people,dc=localhost,dc=localdomain' /etc/postfix/ldap-aliases.cf"
  assert_success
  run docker exec mail_with_ldap /bin/sh -c "grep 'bind_dn = cn=admin,dc=localhost,dc=localdomain' /etc/postfix/ldap-aliases.cf"
  assert_success
+}
+
+@test "checking postfix: remove privacy details of the sender" {
+  run docker exec mail_privacy /bin/sh -c "ls /var/mail/localhost.localdomain/user1/new | wc -l"
+  assert_success
+  assert_output 1
+  run docker exec mail_privacy /bin/sh -c "grep -rE "^User-Agent:" /var/mail/localhost.localdomain/user1/new | wc -l"
+  assert_success
+  assert_output 0
 }
 
 # dovecot
@@ -1099,8 +1226,18 @@ load 'test_helper/bats-assert/load'
   assert_output 1
 }
 
+@test "checking dovecot: ldap mail delivery works for a different domain then the mailserver" {
+  run docker exec mail_with_ldap /bin/sh -c "sendmail -f user@external.tld some.other.user@localhost.otherdomain < /tmp/docker-mailserver-test/email-templates/test-email.txt"
+  sleep 10
+  run docker exec mail_with_ldap /bin/sh -c "ls -A /var/mail/localhost.localdomain/some.other.user/new | wc -l"
+  assert_success
+  assert_output 1
+}
+
 @test "checking dovecot: ldap config overwrites success" {
   run docker exec mail_with_ldap /bin/sh -c "grep 'hosts = ldap' /etc/dovecot/dovecot-ldap.conf.ext"
+  assert_success
+  run docker exec mail_with_ldap /bin/sh -c "grep 'tls = no' /etc/dovecot/dovecot-ldap.conf.ext"
   assert_success
   run docker exec mail_with_ldap /bin/sh -c "grep 'base = ou=people,dc=localhost,dc=localdomain' /etc/dovecot/dovecot-ldap.conf.ext"
   assert_success
@@ -1116,6 +1253,10 @@ load 'test_helper/bats-assert/load'
 
 @test "checking saslauthd: ldap smtp authentication" {
   run docker exec mail_with_ldap /bin/sh -c "nc -w 5 0.0.0.0 25 < /tmp/docker-mailserver-test/auth/sasl-ldap-smtp-auth.txt | grep 'Authentication successful'"
+  assert_success
+  run docker exec mail_with_ldap /bin/sh -c "openssl s_client -quiet -connect 0.0.0.0:465 < /tmp/docker-mailserver-test/auth/sasl-ldap-smtp-auth.txt | grep 'Authentication successful'"
+  assert_success
+  run docker exec mail_with_ldap /bin/sh -c "openssl s_client -quiet -starttls smtp -connect 0.0.0.0:587 < /tmp/docker-mailserver-test/auth/sasl-ldap-smtp-auth.txt | grep 'Authentication successful'"
   assert_success
 }
 
@@ -1175,18 +1316,34 @@ load 'test_helper/bats-assert/load'
   assert_output 0
 }
 
-# postfix
-@test "checking postfix: only A grade TLS ciphers are used" {
+# postfix submission TLS
+@test "checking postfix submission: only A grade TLS ciphers are used" {
   run docker run --rm -i --link mail:postfix \
     --entrypoint sh instrumentisto/nmap -c \
       'nmap --script ssl-enum-ciphers -p 587 postfix | grep "least strength: A"'
   assert_success
 }
 
-@test "checking postfix: nmap produces no warnings on TLS ciphers verifying" {
+@test "checking postfix submission: nmap produces no warnings on TLS ciphers verifying" {
   run docker run --rm -i --link mail:postfix \
     --entrypoint sh instrumentisto/nmap -c \
       'nmap --script ssl-enum-ciphers -p 587 postfix | grep "warnings" | wc -l'
+  assert_success
+  assert_output 0
+}
+
+# postfix smtps SSL
+@test "checking postfix smtps: only A grade TLS ciphers are used" {
+  run docker run --rm -i --link mail:postfix \
+    --entrypoint sh instrumentisto/nmap -c \
+      'nmap --script ssl-enum-ciphers -p 465 postfix | grep "least strength: A"'
+  assert_success
+}
+
+@test "checking postfix smtps: nmap produces no warnings on TLS ciphers verifying" {
+  run docker run --rm -i --link mail:postfix \
+    --entrypoint sh instrumentisto/nmap -c \
+      'nmap --script ssl-enum-ciphers -p 465 postfix | grep "warnings" | wc -l'
   assert_success
   assert_output 0
 }
@@ -1207,7 +1364,7 @@ load 'test_helper/bats-assert/load'
 }
 
 @test "checking restart of process: amavisd-new" {
-  run docker exec mail /bin/bash -c "pkill amavi && sleep 10 && ps aux --forest | grep -v grep | grep '/usr/sbin/amavisd-new (master)'"
+  run docker exec mail /bin/bash -c "pkill amavi && sleep 12 && ps aux --forest | grep -v grep | grep '/usr/sbin/amavisd-new (master)'"
   assert_success
 }
 
@@ -1240,4 +1397,3 @@ load 'test_helper/bats-assert/load'
   run docker exec mail_with_ldap /bin/bash -c "pkill saslauthd && sleep 10 && ps aux --forest | grep -v grep | grep '/usr/sbin/saslauthd'"
   assert_success
 }
-

@@ -1,8 +1,8 @@
 NAME = tvial/docker-mailserver:testing
 
-all: build-no-cache generate-accounts run fixtures tests clean
-all-fast: build generate-accounts run fixtures tests clean
-no-build: generate-accounts run fixtures tests clean
+all: build-no-cache generate-accounts run generate-accounts-after-run fixtures tests clean
+all-fast: build generate-accounts run generate-accounts-after-run fixtures tests clean
+no-build: generate-accounts run generate-accounts-after-run fixtures tests clean
 
 build-no-cache:
 	cd test/docker-openldap/ && docker build -f Dockerfile -t ldap --no-cache .
@@ -31,6 +31,24 @@ run:
 		-e VIRUSMAILS_DELETE_DELAY=7 \
 		-e SASL_PASSWD="external-domain.com username:password" \
 		-e ENABLE_MANAGESIEVE=1 \
+		--cap-add=SYS_PTRACE \
+		-e PERMIT_DOCKER=host \
+		-e DMS_DEBUG=0 \
+		-h mail.my-domain.com -t $(NAME)
+	sleep 15
+	docker run -d --name mail_privacy \
+		-v "`pwd`/test/config":/tmp/docker-mailserver \
+		-v "`pwd`/test":/tmp/docker-mailserver-test \
+		-e ENABLE_CLAMAV=1 \
+		-e ENABLE_SPAMASSASSIN=1 \
+		-e SA_TAG=-5.0 \
+		-e SA_TAG2=2.0 \
+		-e SA_KILL=3.0 \
+		-e SA_SPAM_SUBJECT="SPAM: " \
+		-e VIRUSMAILS_DELETE_DELAY=7 \
+		-e SASL_PASSWD="external-domain.com username:password" \
+		-e ENABLE_MANAGESIEVE=1 \
+		--cap-add=SYS_PTRACE \
 		-e PERMIT_DOCKER=host \
 		-e DMS_DEBUG=0 \
 		-h mail.my-domain.com -t $(NAME)
@@ -110,12 +128,15 @@ run:
 		-v "`pwd`/test":/tmp/docker-mailserver-test \
 		-e ENABLE_LDAP=1 \
 		-e LDAP_SERVER_HOST=ldap \
+		-e LDAP_START_TLS=no \
 		-e LDAP_SEARCH_BASE=ou=people,dc=localhost,dc=localdomain \
 		-e LDAP_BIND_DN=cn=admin,dc=localhost,dc=localdomain \
 		-e LDAP_BIND_PW=admin \
 		-e LDAP_QUERY_FILTER_USER="(&(mail=%s)(mailEnabled=TRUE))" \
 		-e LDAP_QUERY_FILTER_GROUP="(&(mailGroupMember=%s)(mailEnabled=TRUE))" \
 		-e LDAP_QUERY_FILTER_ALIAS="(&(mailAlias=%s)(mailEnabled=TRUE))" \
+		-e LDAP_QUERY_FILTER_DOMAIN="(&(|(mail=*@%s)(mailalias=*@%s)(mailGroupMember=*@%s))(mailEnabled=TRUE))" \
+		-e DOVECOT_TLS=no \
 		-e DOVECOT_PASS_FILTER="(&(objectClass=PostfixBookMailAccount)(uniqueIdentifier=%n))" \
 		-e DOVECOT_USER_FILTER="(&(objectClass=PostfixBookMailAccount)(uniqueIdentifier=%n))" \
 		-e ENABLE_SASLAUTHD=1 \
@@ -159,6 +180,9 @@ run:
 		-h mail.my-domain.com -t $(NAME)
 	sleep 20
 
+generate-accounts-after-run:
+	docker run --rm -e MAIL_USER=added@localhost.localdomain -e MAIL_PASS=mypassword -t $(NAME) /bin/sh -c 'echo "$$MAIL_USER|$$(doveadm pw -s SHA512-CRYPT -u $$MAIL_USER -p $$MAIL_PASS)"' >> test/config/postfix-accounts.cf
+	sleep 10
 
 fixtures:
 	cp config/postfix-accounts.cf config/postfix-accounts.cf.bak
@@ -166,6 +190,7 @@ fixtures:
 	docker cp "`pwd`/test/config/sieve/dovecot.sieve" mail:/var/mail/localhost.localdomain/user1/.dovecot.sieve
 	docker exec mail /bin/sh -c "maildirmake.dovecot /var/mail/localhost.localdomain/user1/.INBOX.spam"
 	docker exec mail /bin/sh -c "chown 5000:5000 -R /var/mail/localhost.localdomain/user1/.INBOX.spam"
+	sleep 30
 	# Sending test mails
 	docker exec mail /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/amavis-spam.txt"
 	docker exec mail /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/amavis-virus.txt"
@@ -174,6 +199,7 @@ fixtures:
 	docker exec mail /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/existing-alias-recipient-delimiter.txt"
 	docker exec mail /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/existing-user1.txt"
 	docker exec mail /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/existing-user2.txt"
+	docker exec mail /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/existing-added.txt"
 	docker exec mail /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/existing-user-and-cc-local-alias.txt"
 	docker exec mail /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/existing-regexp-alias-external.txt"
 	docker exec mail /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/existing-regexp-alias-local.txt"
@@ -184,10 +210,10 @@ fixtures:
 	docker exec mail_disabled_clamav_spamassassin /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/existing-user1.txt"
 	# postfix virtual transport lmtp
 	docker exec mail_lmtp_ip /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/existing-user1.txt"
-
+	docker exec mail_privacy /bin/sh -c "openssl s_client -quiet -starttls smtp -connect 0.0.0.0:587 < /tmp/docker-mailserver-test/email-templates/send-privacy-email.txt"
 	docker exec mail_override_hostname /bin/sh -c "nc 0.0.0.0 25 < /tmp/docker-mailserver-test/email-templates/existing-user1.txt"
 	# Wait for mails to be analyzed
-	sleep 40
+	sleep 80
 
 tests:
 	# Start tests
@@ -197,6 +223,7 @@ clean:
 	# Remove running test containers
 	-docker rm -f \
 		mail \
+		mail_privacy \
 		mail_pop3 \
 		mail_smtponly \
 		mail_smtponly_without_config \
@@ -219,4 +246,6 @@ clean:
 	-sudo rm -rf test/onedir \
 		test/config/empty \
 		test/config/without-accounts \
-		test/config/without-virtual
+		test/config/without-virtual \
+		test/config/with-domain \
+		test/config/dovecot-lmtp/userdb

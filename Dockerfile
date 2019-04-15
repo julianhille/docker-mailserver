@@ -1,10 +1,11 @@
-FROM ubuntu:16.04
+FROM debian:stretch-slim
 MAINTAINER Thomas VIAL
 
 ENV DEBIAN_FRONTEND noninteractive
 ENV VIRUSMAILS_DELETE_DELAY=7
 ENV ONE_DIR=0
 ENV ENABLE_POSTGREY=0
+ENV FETCHMAIL_POLL=300
 ENV POSTGREY_DELAY=300
 ENV POSTGREY_MAX_AGE=35
 ENV POSTGREY_TEXT="Delayed by postgrey"
@@ -31,6 +32,7 @@ RUN apt-get update -q --fix-missing && \
     dovecot-imapd \
     dovecot-ldap \
     dovecot-lmtpd \
+    dovecot-mysql \
     dovecot-managesieved \
     dovecot-pop3d \
     dovecot-sieve \
@@ -40,6 +42,8 @@ RUN apt-get update -q --fix-missing && \
     file \
     gamin \
     gzip \
+    gnupg \
+    iproute2 \
     iptables \
     locales \
     liblz4-tool \
@@ -56,9 +60,10 @@ RUN apt-get update -q --fix-missing && \
     pax \
     p7zip-full \
     postfix-ldap \
+    postfix-pcre \
+    postfix-mysql \
     postfix-policyd-spf-python \
     pyzor \
-    rar \
     razor \
     ripole \
     rpm2cpio \
@@ -113,10 +118,12 @@ RUN sed -i -e 's/include_try \/usr\/share\/dovecot\/protocols\.d/include_try \/e
 
 # Configures LDAP
 COPY target/dovecot/dovecot-ldap.conf.ext /etc/dovecot
-COPY target/postfix/ldap-users.cf target/postfix/ldap-groups.cf target/postfix/ldap-aliases.cf /etc/postfix/
+COPY target/dovecot/dovecot-sql.conf.ext /etc/dovecot
+COPY target/postfix/mysql-aliases.cf target/postfix/mysql-domains.cf target/postfix/mysql-maps.cf target/postfix/ldap-users.cf target/postfix/ldap-groups.cf target/postfix/ldap-aliases.cf  target/postfix/ldap-domains.cf /etc/postfix/
 
-# Enables Spamassassin CRON updates
-RUN sed -i -r 's/^(CRON)=0/\1=1/g' /etc/default/spamassassin
+# Enables Spamassassin CRON updates and update hook for supervisor
+RUN sed -i -r 's/^(CRON)=0/\1=1/g' /etc/default/spamassassin && \
+    sed -i -r 's/^\$INIT restart/supervisorctl restart amavis/g' /etc/spamassassin/sa-update-hooks.d/amavisd-new
 
 # Enables Postgrey
 COPY target/postgrey/postgrey /etc/default/postgrey
@@ -126,10 +133,12 @@ RUN chmod 755 /etc/init.d/postgrey && \
   chown postgrey:postgrey /var/run/postgrey
 
 # Enables Amavis
-COPY target/amavis/conf.d/60-dms_default_config /etc/amavis/conf.d/
+COPY target/amavis/conf.d/* /etc/amavis/conf.d/
 RUN sed -i -r 's/#(@|   \\%)bypass/\1bypass/g' /etc/amavis/conf.d/15-content_filter_mode && \
   adduser clamav amavis && \
   adduser amavis clamav && \
+  # no syslog user in debian compared to ubuntu
+  adduser --system syslog && \
   useradd -u 5000 -d /home/docker -s /bin/bash -p $(echo docker | openssl passwd -1 -stdin) docker && \
   (echo "0 4 * * * /usr/local/bin/virus-wiper" ; crontab -l) | crontab -
 
@@ -141,8 +150,7 @@ RUN echo "ignoreregex =" >> /etc/fail2ban/filter.d/postfix-sasl.conf && mkdir /v
 # Enables Pyzor and Razor
 USER amavis
 RUN razor-admin -create && \
-  razor-admin -register && \
-  pyzor discover
+  razor-admin -register
 USER root
 
 # Configure DKIM (opendkim)
@@ -162,6 +170,7 @@ RUN mkdir /var/run/fetchmail && chown fetchmail /var/run/fetchmail
 
 # Configures Postfix
 COPY target/postfix/main.cf target/postfix/master.cf /etc/postfix/
+COPY target/postfix/sender_header_filter.pcre /etc/postfix/maps/sender_header_filter.pcre
 RUN echo "" > /etc/aliases && \
   openssl dhparam -out /etc/postfix/dhparams.pem 2048
 
@@ -173,28 +182,31 @@ RUN sed -i -r "/^#?compress/c\compress\ncopytruncate" /etc/logrotate.conf && \
   chown -R clamav:root /var/log/mail/clamav.log && \
   touch /var/log/mail/freshclam.log && \
   chown -R clamav:root /var/log/mail/freshclam.log && \
-  sed -i -r 's|/var/log/mail|/var/log/mail/mail|g' /etc/rsyslog.d/50-default.conf && \
-  sed -i -r 's|;auth,authpriv.none|;mail.none;mail.error;auth,authpriv.none|g' /etc/rsyslog.d/50-default.conf && \
+  sed -i -r 's|/var/log/mail|/var/log/mail/mail|g' /etc/rsyslog.conf && \
+  sed -i -r 's|;auth,authpriv.none|;mail.none;mail.error;auth,authpriv.none|g' /etc/rsyslog.conf && \
   sed -i -r 's|LogFile /var/log/clamav/|LogFile /var/log/mail/|g' /etc/clamav/clamd.conf && \
   sed -i -r 's|UpdateLogFile /var/log/clamav/|UpdateLogFile /var/log/mail/|g' /etc/clamav/freshclam.conf && \
   sed -i -r 's|/var/log/clamav|/var/log/mail|g' /etc/logrotate.d/clamav-daemon && \
   sed -i -r 's|/var/log/clamav|/var/log/mail|g' /etc/logrotate.d/clamav-freshclam && \
-  sed -i -r 's|/var/log/mail|/var/log/mail/mail|g' /etc/logrotate.d/rsyslog
+  sed -i -r 's|/var/log/mail|/var/log/mail/mail|g' /etc/logrotate.d/rsyslog && \
+  # prevent syslog logrotate warnings \
+  sed -i -e 's/\(printerror "could not determine current runlevel"\)/#\1/' /usr/sbin/invoke-rc.d && \
+  sed -i -e 's/^\(POLICYHELPER=\).*/\1/' /usr/sbin/invoke-rc.d
 
 # Get LetsEncrypt signed certificate
 RUN curl -s https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem > /etc/ssl/certs/lets-encrypt-x3-cross-signed.pem
 
 COPY ./target/bin /usr/local/bin
 # Start-mailserver script
-COPY ./target/start-mailserver.sh ./target/fail2ban-wrapper.sh ./target/postfix-wrapper.sh ./target/docker-configomat/configomat.sh /usr/local/bin/
+COPY ./target/check-for-changes.sh ./target/start-mailserver.sh ./target/fail2ban-wrapper.sh ./target/postfix-wrapper.sh ./target/docker-configomat/configomat.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/*
 
 # Configure supervisor
-COPY target/supervisor/* /etc/supervisor/conf.d/
+COPY target/supervisor/supervisord.conf /etc/supervisor/supervisord.conf
+COPY target/supervisor/conf.d/* /etc/supervisor/conf.d/
 
-EXPOSE 25 587 143 993 110 995 4190
+EXPOSE 25 587 143 465 993 110 995 4190
 
 CMD supervisord -c /etc/supervisor/supervisord.conf
 
 ADD target/filebeat.yml.tmpl /etc/filebeat/filebeat.yml.tmpl
-

@@ -9,8 +9,8 @@ Easy to deploy and upgrade.
 
 Includes:
 
-- postfix with smtp or ldap auth
-- dovecot for sasl, imap (and optional pop3) with ssl support, with ldap auth
+- postfix with smtp, mysql or ldap auth
+- dovecot for sasl, imap (and optional pop3) with ssl support, with ldap or mysql auth
 - saslauthd with ldap auth
 - amavis
 - spamassasin supporting custom rules
@@ -29,6 +29,18 @@ Includes:
 Why I created this image: [Simple mail server with Docker](http://tvi.al/simple-mail-server-with-docker/)
 
 Before you open an issue, please have a look this `README`, the [Wiki](https://github.com/tomav/docker-mailserver/wiki/) and Postfix/Dovecot documentation.
+
+## Requirements
+
+Recommended:
+- 1 CPU
+- 1GB RAM
+
+Minimum:
+- 1 CPU
+- 512MB RAM
+
+**Note:** You'll need to deactivate some services like ClamAV to be able to run on a host with 512MB of RAM.
 
 ## Usage
 
@@ -71,6 +83,7 @@ services:
     - DMS_DEBUG=0
     cap_add:
     - NET_ADMIN
+    - SYS_PTRACE
 
 volumes:
   maildata:
@@ -125,6 +138,7 @@ services:
       - POSTMASTER_ADDRESS=postmaster@localhost.localdomain
     cap_add:
       - NET_ADMIN
+      - SYS_PTRACE
 
 volumes:
   maildata:
@@ -150,6 +164,12 @@ Don't forget to adapt MAIL_USER and MAIL_PASS to your needs
     docker run --rm \
       -v "$(pwd)/config":/tmp/docker-mailserver \
       -ti tvial/docker-mailserver:latest generate-dkim-config
+
+This generates DKIM keys for domains in configuration files. You can also generate DKIM key for a domain by using command
+
+    docker run --rm \
+      -v "$(pwd)/config":/tmp/docker-mailserver \
+      -ti tvial/docker-mailserver:latest generate-dkim-domain name_of_domain
 
 Now the keys are generated, you can configure your DNS server by just pasting the content of `config/opendkim/keys/domain.tld/mail.txt` in your `domain.tld.hosts` zone.
 
@@ -237,6 +257,14 @@ Otherwise, `iptables` won't be able to ban IPs.
   - **0** => `fetchmail` disabled
   - 1 => `fetchmail` enabled
 
+##### FETCHMAIL_POLL
+  - **300** => `fetchmail` The number of seconds for the interval
+
+=======
+##### ENABLE_MYSQL
+  - **empty** => MYSQL authentification is disabled
+  - 1 => MYSQL authentification is enabled
+  
 ##### ENABLE_LDAP
 
   - **empty** => LDAP authentification is disabled
@@ -244,6 +272,11 @@ Otherwise, `iptables` won't be able to ban IPs.
   - NOTE:
     - A second container for the ldap service is necessary (e.g. [docker-openldap](https://github.com/osixia/docker-openldap))
     - For preparing the ldap server to use in combination with this continer [this](http://acidx.net/wordpress/2014/06/installing-a-mailserver-with-postfix-dovecot-sasl-ldap-roundcube/) article may be helpful
+
+##### LDAP_START_TLS
+
+  - **empty** => no
+  - yes => LDAP over TLS enabled for Postfix
 
 ##### LDAP_SERVER_HOST
 
@@ -280,6 +313,11 @@ Otherwise, `iptables` won't be able to ban IPs.
 
   - e.g. `"(&(mailAlias=%s)(mailEnabled=TRUE))"`
   - => Specify how ldap should be asked for aliases
+
+##### DOVECOT_TLS
+
+  - **empty** => no
+  - yes => LDAP over TLS enabled for Dovecot
 
 ##### DOVECOT_USER_FILTER
 

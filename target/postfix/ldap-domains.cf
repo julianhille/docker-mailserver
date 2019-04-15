@@ -1,7 +1,7 @@
 bind             = yes
 bind_dn          = cn=admin,dc=domain,dc=com
 bind_pw          = admin
-query_filter     = (&(mailAlias=%s)(mailEnabled=TRUE))
+query_filter     = (&(|(mail=*@%s)(mailalias=*@%s))(mailEnabled=TRUE))
 result_attribute = mail
 search_base      = ou=people,dc=domain,dc=com
 server_host      = mail.domain.com
