@@ -73,6 +73,7 @@ RUN \
   pflogsumm \
   p7zip-full \
   postfix-ldap \
+  postfix-mysql \
   postfix-pcre \
   postfix-policyd-spf-python \
   postsrsd \
@@ -92,6 +93,7 @@ RUN \
   dovecot-imapd \
   dovecot-ldap \
   dovecot-lmtpd \
+  dovecot-mysql \
   dovecot-managesieved \
   dovecot-pop3d \
   dovecot-sieve \
@@ -140,7 +142,8 @@ RUN sed -i -e 's/include_try \/usr\/share\/dovecot\/protocols\.d/include_try \/e
 
 # Configures LDAP
 COPY target/dovecot/dovecot-ldap.conf.ext /etc/dovecot
-COPY target/postfix/ldap-users.cf target/postfix/ldap-groups.cf target/postfix/ldap-aliases.cf target/postfix/ldap-domains.cf /etc/postfix/
+COPY target/dovecot/dovecot-sql.conf.ext /etc/dovecot
+COPY target/postfix/mysql-aliases.cf target/postfix/mysql-domains.cf target/postfix/mysql-maps.cf target/postfix/ldap-users.cf target/postfix/ldap-groups.cf target/postfix/ldap-aliases.cf target/postfix/ldap-domains.cf /etc/postfix/
 
 # Enables Spamassassin CRON updates and update hook for supervisor
 # hadolint ignore=SC2016

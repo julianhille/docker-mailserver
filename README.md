@@ -17,6 +17,7 @@
 
 A fullstack but simple mail server (SMTP, IMAP, Antispam, Antivirus...).
 Only configuration files, no SQL database. Keep it simple and versioned.
+Added MySQL support.
 Easy to deploy and upgrade.
 
 [Why this image was created.](http://tvi.al/simple-mail-server-with-docker/)
@@ -897,3 +898,25 @@ you to replace both instead of just the envelope sender.
 
 - **empty** => no default
 - password for default relay user
+
+##### ENABLE_MYSQL
+- **empty** => MYSQL authentification is disabled
+- 1 => MYSQL authentification is enabled
+
+##### POSTFIX_MYSQL_HOSTS
+- **empty** => 
+- provide MySQL database host. TODO: specify if it accepts a list
+
+##### POSTFIX_MYSQL_DBNAME
+- **empty** => 
+- provide MySQL database name
+
+##### POSTFIX_MYSQL_USER
+- **empty** => 
+- provide MySQL database username
+
+##### POSTFIX_MYSQL_PASSWORD
+- **empty** => 
+- provide MySQL database password
+
+

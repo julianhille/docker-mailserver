@@ -25,6 +25,7 @@ DEFAULT_VARS["ENABLE_POSTGREY"]="${ENABLE_POSTGREY:=0}"
 DEFAULT_VARS["POSTGREY_DELAY"]="${POSTGREY_DELAY:=300}"
 DEFAULT_VARS["POSTGREY_MAX_AGE"]="${POSTGREY_MAX_AGE:=35}"
 DEFAULT_VARS["POSTGREY_AUTO_WHITELIST_CLIENTS"]="${POSTGREY_AUTO_WHITELIST_CLIENTS:=5}"
+DEFAULT_VARS["ENABLE_MYSQL"]="${ENABLE_MYSQL:="0"}"
 DEFAULT_VARS["POSTGREY_TEXT"]="${POSTGREY_TEXT:="Delayed by postgrey"}"
 DEFAULT_VARS["POSTFIX_MESSAGE_SIZE_LIMIT"]="${POSTFIX_MESSAGE_SIZE_LIMIT:=10240000}"  # ~10 MB by default
 DEFAULT_VARS["POSTFIX_MAILBOX_SIZE_LIMIT"]="${POSTFIX_MAILBOX_SIZE_LIMIT:=0}"        # no limit by default
@@ -117,6 +118,7 @@ function register_functions
   fi
 
   [[ ${ENABLE_LDAP} -eq 1 ]] && _register_setup_function "_setup_ldap"
+  [[ ${ENABLE_MYSQL} -eq 1 ]] && _register_setup_function "_setup_mysql"
   [[ ${ENABLE_SASLAUTHD} -eq 1 ]] && _register_setup_function "_setup_saslauthd"
   [[ ${ENABLE_POSTGREY} -eq 1 ]] && _register_setup_function "_setup_postgrey"
 
@@ -357,6 +359,10 @@ function _check_hostname
 function _check_environment_variables
 {
   _notify "task" "Check that there are no conflicts with env variables [in ${FUNCNAME[0]}]"
+  if [[ ${ENABLE_LDAP} = 1 ]] && [[ ${ENABLE_MYSQL} = 1 ]]; then
+    _notify 'fatal' "Mysql and LDAP must not be enabled at the same time."
+    _defunc
+  fi
   return 0
 }
 
@@ -502,6 +508,68 @@ function _setup_dovecot_hostname
   _notify 'inf' "Applying hostname to /etc/dovecot/conf.d/15-lda.conf"
   sed -i 's/^#hostname =.*$/hostname = '"${HOSTNAME}"'/g' /etc/dovecot/conf.d/15-lda.conf
 }
+
+function _setup_mysql() {
+	_notify 'task' 'Setting up MySQL'
+
+	_notify 'inf' "Configuring postfix MySQL"
+
+	declare -A _postfix_mysql_mapping
+
+	_postfix_mysql_mapping["POSTFIX_MYSQL_HOSTS"]="${POSTFIX_MYSQL_HOSTS:="${MYSQL_HOST}"}"
+	_postfix_mysql_mapping["POSTFIX_MYSQL_DBNAME"]="${POSTFIX_MYSQL_DBNAME:="${MYSQL_DB}"}"
+	_postfix_mysql_mapping["POSTFIX_MYSQL_USER"]="${POSTFIX_MYSQL_USER:="${MYSQL_USER}"}"
+	_postfix_mysql_mapping["POSTFIX_MYSQL_PASSWORD"]="${POSTFIX_MYSQL_PASSWORD:="${MYSQL_PASSWORD}"}"
+	for var in ${!_postfix_mysql_mapping[@]}; do
+		export $var=${_postfix_mysql_mapping[$var]}
+	done
+	for f in /etc/postfix/mysql-aliases.cf /etc/postfix/mysql-domains.cf /etc/postfix/mysql-maps-aliases.cf
+	do
+		configomat.sh "POSTFIX_MYSQL_" "$f"
+	done
+
+	_notify 'inf' "Configuring dovecot MySQL"
+	declare -A _dovecot_mysql_mapping
+	_dovecot_mysql_connect="host=${MYSQL_HOST} dbname=${MYSQL_DB} user=${MYSQL_USER} password=${MYSQL_PASSWORD}"
+
+
+	#_dovecot_mysql_mapping["DOVECOT_MYSQL_CONNECT"]="${DOVECOT_MYSQL_CONNECT:="${_dovecot_mysql_connect}"}"
+	# This is nor working as configomat does not support spaces in the value.
+	_dovecot_mysql_mapping["DOVECOT_MYSQL_DEFAULT_PASS_SCHEME"]="${DOVECOT_MYSQL_DEFAULT_PASS_SCHEME:="${MYSQL_PASS_SCHEME}"}"
+
+	for var in ${!_dovecot_mysql_mapping[@]}; do
+		export $var=${_dovecot_mysql_mapping[$var]}
+	done
+
+	configomat.sh "DOVECOT_MYSQL_" "/etc/dovecot/dovecot-sql.conf.ext"
+
+	_dovecot_mysql_connect_escaped=$(sed 's/[&/\]/\\&/g' <<<"$_dovecot_mysql_connect")
+	sed -i  "s/^connect.*/connect = $_dovecot_mysql_connect_escaped/g" "/etc/dovecot/dovecot-sql.conf.ext"
+	# Add  domainname to vhost.
+	echo $DOMAINNAME >> /tmp/vhost.tmp
+
+	_notify 'inf' "Enabling dovecot mysql authentification"
+	sed -i -e '/\!include auth-sql\.conf\.ext/s/^#//' /etc/dovecot/conf.d/10-auth.conf
+	sed -i -e '/\!include auth-passwdfile\.inc/s/^/#/' /etc/dovecot/conf.d/10-auth.conf
+	sed -i -e '/\!include auth-ldap\.inc/s/^/#/' /etc/dovecot/conf.d/10-auth.conf
+
+	_notify 'inf' "Configuring MySQL"
+	[ -f /etc/postfix/mysql-maps.cf ] && \
+		postconf -e "virtual_mailbox_maps = mysql:/etc/postfix/mysql-maps.cf" || \
+		_notify 'inf' "==> Warning: /etc/postfix/mysql-maps.cf not found"
+
+	[ -f /etc/postfix/mysql-aliases.cf ] && \
+		postconf -e virtual_alias_maps="mysql:/etc/postfix/mysql-aliases.cf" || \
+		_notify 'inf' "==> Warning: /etc/postfix/mysql-aliases.cf not found"
+
+	[ -f /etc/postfix/mysql-domains.cf ] && \
+		postconf -e virtual_mailbox_domains="mysql:/etc/postfix/mysql-domains.cf" || \
+		_notify 'inf' "==> Warning: /etc/postfix/mysql-domains.cf not found"
+
+	return 0
+}
+
+
 
 function _setup_dovecot
 {
@@ -650,7 +718,7 @@ function _setup_dovecot_local_user
   : >/etc/postfix/vmailbox
   : >/etc/dovecot/userdb
 
-  if [[ -f /tmp/docker-mailserver/postfix-accounts.cf ]] && [[ ${ENABLE_LDAP} -ne 1 ]]
+  if [[ -f /tmp/docker-mailserver/postfix-accounts.cf ]] && [[ ${ENABLE_LDAP} -ne 1 ]] && [[ ${ENABLE_MYSQL} -ne 1 ]]
   then
     _notify 'inf' "Checking file line endings"
     sed -i 's/\r//g' /tmp/docker-mailserver/postfix-accounts.cf
@@ -778,6 +846,7 @@ function _setup_ldap
   _notify 'inf' "Enabling dovecot LDAP authentification"
 
   sed -i -e '/\!include auth-ldap\.conf\.ext/s/^#//' /etc/dovecot/conf.d/10-auth.conf
+  sed -i -e '/\!include auth-sql\.conf\.ext/s/^/#/' /etc/dovecot/conf.d/10-auth.conf
   sed -i -e '/\!include auth-passwdfile\.inc/s/^/#/' /etc/dovecot/conf.d/10-auth.conf
 
   _notify 'inf' "Configuring LDAP"
