@@ -779,7 +779,7 @@ function _setup_dovecot_local_user
   if ! grep '@' /tmp/docker-mailserver/postfix-accounts.cf | grep -q '|'
   then
     #if [[ ${ENABLE_LDAP} -eq 0 ]]
-    if [ $ENABLE_LDAP -eq 0 -a $ENABLE_MYSQL -eq 0 ]; then
+    if [ $ENABLE_LDAP -eq 0 -a $ENABLE_MYSQL -eq 0 ]
     then
       _notify 'fatal' "Unless using LDAP or MySQL, you need at least 1 email account to start Dovecot."
       _defunc
