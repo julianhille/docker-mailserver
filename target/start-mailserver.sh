@@ -360,7 +360,7 @@ function _check_environment_variables
 {
   _notify "task" "Check that there are no conflicts with env variables [in ${FUNCNAME[0]}]"
   if [[ ${ENABLE_LDAP} = 1 ]] && [[ ${ENABLE_MYSQL} = 1 ]]; then
-    _notify 'fatal' "Mysql and LDAP must not be enabled at the same time."
+    _notify 'fatal' "MySQL and LDAP must not be enabled at the same time."
     _defunc
   fi
   return 0
@@ -568,8 +568,6 @@ function _setup_mysql() {
 
 	return 0
 }
-
-
 
 function _setup_dovecot
 {
@@ -780,9 +778,10 @@ function _setup_dovecot_local_user
 
   if ! grep '@' /tmp/docker-mailserver/postfix-accounts.cf | grep -q '|'
   then
-    if [[ ${ENABLE_LDAP} -eq 0 ]]
+    #if [[ ${ENABLE_LDAP} -eq 0 ]]
+    if [ $ENABLE_LDAP -eq 0 -a $ENABLE_MYSQL -eq 0 ]; then
     then
-      _notify 'fatal' "Unless using LDAP, you need at least 1 email account to start Dovecot."
+      _notify 'fatal' "Unless using LDAP or MySQL, you need at least 1 email account to start Dovecot."
       _defunc
     fi
   fi
