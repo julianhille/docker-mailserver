@@ -919,4 +919,6 @@ you to replace both instead of just the envelope sender.
 - **empty** => 
 - provide MySQL database password
 
-
+##### POSTFIX_MYSQL_PASSWORD
+- **empty** => MD5-CRYPT
+- provide `default_pass_scheme` for `/etc/dovecot/dovecot-sql.conf.ext` file
