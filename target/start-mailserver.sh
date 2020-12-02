@@ -530,7 +530,8 @@ function _setup_mysql() {
 
 	_notify 'inf' "Configuring dovecot MySQL"
 	declare -A _dovecot_mysql_mapping
-	_dovecot_mysql_connect="host=${MYSQL_HOST} dbname=${MYSQL_DB} user=${MYSQL_USER} password=${MYSQL_PASSWORD}"
+	#_dovecot_mysql_connect="host=${MYSQL_HOST} dbname=${MYSQL_DB} user=${MYSQL_USER} password=${MYSQL_PASSWORD}"
+	_dovecot_mysql_connect="host=${POSTFIX_MYSQL_HOSTS} dbname=${POSTFIX_MYSQL_DBNAME} user=${POSTFIX_MYSQL_USER} password=${POSTFIX_MYSQL_PASSWORD}"
 
 
 	#_dovecot_mysql_mapping["DOVECOT_MYSQL_CONNECT"]="${DOVECOT_MYSQL_CONNECT:="${_dovecot_mysql_connect}"}"
